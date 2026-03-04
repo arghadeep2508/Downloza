@@ -7,6 +7,7 @@ import time
 from flask import Flask, render_template, request, jsonify, send_file
 from yt_dlp import YoutubeDL
 
+
 app = Flask(__name__)
 
 # ======================================
@@ -16,8 +17,8 @@ app = Flask(__name__)
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-FILE_EXPIRY_SECONDS = 600  # 10 minutes
-MAX_CONCURRENT_PER_IP = 1  # Only ONE active download per user
+FILE_EXPIRY_SECONDS = 600
+MAX_CONCURRENT_PER_IP = 1
 
 download_state = {}
 active_ip_downloads = {}
@@ -33,12 +34,19 @@ if not shutil.which("ffmpeg"):
 # FILENAME SANITIZER
 # ======================================
 
-def sanitize_filename(name: str) -> str:
+def sanitize_filename(name: str):
     name = re.sub(r'[<>:"/\\|?*]', '', name)
     name = name.encode("ascii", "ignore").decode()
     name = re.sub(r'\s+', '_', name)
     name = re.sub(r'_+', '_', name)
     return name[:40]
+
+# ======================================
+# URL VALIDATION
+# ======================================
+
+def valid_url(url):
+    return url and url.startswith(("http://", "https://"))
 
 # ======================================
 # FORMAT EXTRACTION
@@ -49,11 +57,16 @@ def get_available_formats(url):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
-        "noplaylist": True
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "ignoreerrors": True
     }
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
+
+    if not info:
+        return [{"height": "Best", "size": "Auto"}]
 
     if info.get("_type") == "playlist" and info.get("entries"):
         info = info["entries"][0]
@@ -61,16 +74,24 @@ def get_available_formats(url):
     formats = []
     seen = set()
 
-    if not info.get("formats"):
-        return [{"height": "Best", "size": "Auto"}]
+    for f in info.get("formats", []):
 
-    for f in info["formats"]:
         height = f.get("height")
+
         if height and height not in seen:
             seen.add(height)
+
             size = f.get("filesize") or f.get("filesize_approx")
-            size_text = f"{round(size/1024/1024,2)} MB" if size else "Unknown"
-            formats.append({"height": height, "size": size_text})
+
+            if size:
+                size_text = f"{round(size/1024/1024,2)} MB"
+            else:
+                size_text = "Unknown"
+
+            formats.append({
+                "height": height,
+                "size": size_text
+            })
 
     formats = sorted(formats, key=lambda x: x["height"])
 
@@ -85,17 +106,28 @@ def get_available_formats(url):
 
 @app.route("/get_formats", methods=["POST"])
 def formats():
+
     try:
+
         data = request.get_json()
         url = data.get("url")
+
+        if not valid_url(url):
+            return jsonify({"error": "Invalid URL"})
+
         formats = get_available_formats(url)
 
         return jsonify({
             "formats": formats,
             "single_option": len(formats) <= 1
         })
+
     except Exception as e:
-        return jsonify({"error": str(e)})
+
+        print("Format error:", e)
+
+        return jsonify({"error": "Could not fetch formats"})
+
 
 # ======================================
 # DOWNLOAD WORKER
@@ -104,41 +136,59 @@ def formats():
 def download_worker(download_id, url, height, user_ip):
 
     def progress_hook(d):
+
         if d["status"] == "downloading":
+
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             downloaded = d.get("downloaded_bytes", 0)
-            if total:
+
+            if total and download_id in download_state:
+
                 download_state[download_id]["progress"] = int(downloaded * 90 / total)
                 download_state[download_id]["status"] = "downloading"
 
     try:
+
         download_state[download_id]["status"] = "processing"
 
         with YoutubeDL({"quiet": True}) as ydl:
+
             info = ydl.extract_info(url, download=False)
+
             if info.get("_type") == "playlist" and info.get("entries"):
                 info = info["entries"][0]
+
             raw_title = info.get("title", "video")
 
         safe_title = sanitize_filename(raw_title)
+
         final_filename = f"{safe_title}_{download_id}.mp4"
         final_path = os.path.join(DOWNLOAD_FOLDER, final_filename)
 
         if height and height != "Best":
+
             format_string = (
                 f"bestvideo[height<={height}]+bestaudio/"
                 f"best[height<={height}]/best"
             )
+
         else:
+
             format_string = "bestvideo+bestaudio/best"
 
         ydl_opts = {
+
             "format": format_string,
             "outtmpl": final_path,
             "noplaylist": True,
-            "progress_hooks": [progress_hook],
             "quiet": True,
+            "progress_hooks": [progress_hook],
             "merge_output_format": "mp4",
+
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0"
+            },
+
             "postprocessor_args": {
                 "ffmpeg": [
                     "-c:v", "copy",
@@ -146,26 +196,35 @@ def download_worker(download_id, url, height, user_ip):
                     "-b:a", "192k"
                 ]
             }
+
         }
 
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
         if os.path.exists(final_path):
+
             download_state[download_id]["progress"] = 100
             download_state[download_id]["status"] = "ready"
             download_state[download_id]["filename"] = final_filename
+
         else:
+
             download_state[download_id]["status"] = "error"
 
     except Exception as e:
+
         print("Download error:", e)
-        download_state[download_id]["status"] = "error"
+
+        if download_id in download_state:
+            download_state[download_id]["status"] = "error"
 
     finally:
-        # Release IP slot
+
         if user_ip in active_ip_downloads:
+
             active_ip_downloads[user_ip] -= 1
+
             if active_ip_downloads[user_ip] <= 0:
                 active_ip_downloads.pop(user_ip)
 
@@ -178,32 +237,41 @@ def download():
 
     user_ip = request.remote_addr
 
-    # Block if already downloading
     current = active_ip_downloads.get(user_ip, 0)
+
     if current >= MAX_CONCURRENT_PER_IP:
+
         return jsonify({
             "error": "Please wait until your current download finishes."
         })
 
-    active_ip_downloads[user_ip] = current + 1
-
     data = request.get_json()
+
     url = data.get("url")
     height = data.get("height")
+
+    if not valid_url(url):
+
+        return jsonify({"error": "Invalid URL"})
+
+    active_ip_downloads[user_ip] = current + 1
 
     download_id = uuid.uuid4().hex[:8]
 
     download_state[download_id] = {
+
         "progress": 0,
         "status": "starting",
         "filename": None,
         "created_at": time.time()
+
     }
 
     thread = threading.Thread(
         target=download_worker,
         args=(download_id, url, height, user_ip)
     )
+
     thread.start()
 
     return jsonify({"download_id": download_id})
@@ -216,11 +284,17 @@ def download():
 def progress(download_id):
 
     if download_id not in download_state:
-        return jsonify({"progress": 0, "status": "invalid"})
+
+        return jsonify({
+            "progress": 0,
+            "status": "invalid"
+        })
+
+    data = download_state[download_id]
 
     return jsonify({
-        "progress": download_state[download_id]["progress"],
-        "status": download_state[download_id]["status"]
+        "progress": data["progress"],
+        "status": data["status"]
     })
 
 # ======================================
@@ -237,9 +311,11 @@ def download_file(download_id):
         return "File not ready yet.", 404
 
     filename = download_state[download_id]["filename"]
+
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
 
     if os.path.exists(file_path):
+
         return send_file(file_path, as_attachment=True)
 
     return "File missing on server.", 404
@@ -249,22 +325,33 @@ def download_file(download_id):
 # ======================================
 
 def cleanup_worker():
+
     while True:
+
         now = time.time()
+
         for download_id in list(download_state.keys()):
+
             data = download_state.get(download_id)
+
             if not data:
                 continue
 
             if now - data.get("created_at", now) > FILE_EXPIRY_SECONDS:
+
                 filename = data.get("filename")
+
                 if filename:
+
                     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+
                     if os.path.exists(file_path):
+
                         try:
                             os.remove(file_path)
                         except:
                             pass
+
                 download_state.pop(download_id, None)
 
         time.sleep(60)
@@ -287,4 +374,5 @@ if __name__ == "__main__":
     cleanup_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
+
     app.run(host="0.0.0.0", port=port)
