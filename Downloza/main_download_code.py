@@ -7,7 +7,6 @@ import time
 from flask import Flask, render_template, request, jsonify, send_file
 from yt_dlp import YoutubeDL
 
-
 app = Flask(__name__)
 
 # ======================================
@@ -46,7 +45,7 @@ def sanitize_filename(name: str):
 # ======================================
 
 def valid_url(url):
-    return url and url.startswith(("http://", "https://"))
+    return isinstance(url, str) and url.startswith(("http://", "https://"))
 
 # ======================================
 # FORMAT EXTRACTION
@@ -83,10 +82,7 @@ def get_available_formats(url):
 
             size = f.get("filesize") or f.get("filesize_approx")
 
-            if size:
-                size_text = f"{round(size/1024/1024,2)} MB"
-            else:
-                size_text = "Unknown"
+            size_text = f"{round(size/1024/1024,2)} MB" if size else "Unknown"
 
             formats.append({
                 "height": height,
@@ -109,7 +105,7 @@ def formats():
 
     try:
 
-        data = request.get_json()
+        data = request.get_json() or {}
         url = data.get("url")
 
         if not valid_url(url):
@@ -123,11 +119,8 @@ def formats():
         })
 
     except Exception as e:
-
         print("Format error:", e)
-
         return jsonify({"error": "Could not fetch formats"})
-
 
 # ======================================
 # DOWNLOAD WORKER
@@ -155,6 +148,10 @@ def download_worker(download_id, url, height, user_ip):
 
             info = ydl.extract_info(url, download=False)
 
+            if not info:
+                download_state[download_id]["status"] = "error"
+                return
+
             if info.get("_type") == "playlist" and info.get("entries"):
                 info = info["entries"][0]
 
@@ -177,18 +174,13 @@ def download_worker(download_id, url, height, user_ip):
             format_string = "bestvideo+bestaudio/best"
 
         ydl_opts = {
-
             "format": format_string,
             "outtmpl": final_path,
             "noplaylist": True,
             "quiet": True,
             "progress_hooks": [progress_hook],
             "merge_output_format": "mp4",
-
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0"
-            },
-
+            "http_headers": {"User-Agent": "Mozilla/5.0"},
             "postprocessor_args": {
                 "ffmpeg": [
                     "-c:v", "copy",
@@ -196,7 +188,6 @@ def download_worker(download_id, url, height, user_ip):
                     "-b:a", "192k"
                 ]
             }
-
         }
 
         with YoutubeDL(ydl_opts) as ydl:
@@ -209,7 +200,6 @@ def download_worker(download_id, url, height, user_ip):
             download_state[download_id]["filename"] = final_filename
 
         else:
-
             download_state[download_id]["status"] = "error"
 
     except Exception as e:
@@ -240,18 +230,16 @@ def download():
     current = active_ip_downloads.get(user_ip, 0)
 
     if current >= MAX_CONCURRENT_PER_IP:
-
         return jsonify({
             "error": "Please wait until your current download finishes."
         })
 
-    data = request.get_json()
+    data = request.get_json() or {}
 
     url = data.get("url")
     height = data.get("height")
 
     if not valid_url(url):
-
         return jsonify({"error": "Invalid URL"})
 
     active_ip_downloads[user_ip] = current + 1
@@ -259,17 +247,16 @@ def download():
     download_id = uuid.uuid4().hex[:8]
 
     download_state[download_id] = {
-
         "progress": 0,
         "status": "starting",
         "filename": None,
         "created_at": time.time()
-
     }
 
     thread = threading.Thread(
         target=download_worker,
-        args=(download_id, url, height, user_ip)
+        args=(download_id, url, height, user_ip),
+        daemon=True
     )
 
     thread.start()
@@ -283,18 +270,14 @@ def download():
 @app.route("/progress/<download_id>")
 def progress(download_id):
 
-    if download_id not in download_state:
+    data = download_state.get(download_id)
 
-        return jsonify({
-            "progress": 0,
-            "status": "invalid"
-        })
-
-    data = download_state[download_id]
+    if not data:
+        return jsonify({"progress": 0, "status": "invalid"})
 
     return jsonify({
-        "progress": data["progress"],
-        "status": data["status"]
+        "progress": data.get("progress", 0),
+        "status": data.get("status", "unknown")
     })
 
 # ======================================
@@ -304,18 +287,19 @@ def progress(download_id):
 @app.route("/download_file/<download_id>")
 def download_file(download_id):
 
-    if download_id not in download_state:
+    data = download_state.get(download_id)
+
+    if not data:
         return "Invalid download ID", 404
 
-    if download_state[download_id]["status"] != "ready":
+    if data.get("status") != "ready":
         return "File not ready yet.", 404
 
-    filename = download_state[download_id]["filename"]
+    filename = data.get("filename")
 
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
 
     if os.path.exists(file_path):
-
         return send_file(file_path, as_attachment=True)
 
     return "File missing on server.", 404
@@ -346,7 +330,6 @@ def cleanup_worker():
                     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
 
                     if os.path.exists(file_path):
-
                         try:
                             os.remove(file_path)
                         except:
@@ -365,6 +348,26 @@ def home():
     return render_template("index.html")
 
 # ======================================
+# EXTRA PAGES
+# ======================================
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html")
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
+@app.route("/contact")
+def contact():
+    return render_template("contact.html")
+
+@app.route("/about")
+def about():
+    return render_template("about.html")
+
+# ======================================
 # RUN
 # ======================================
 
@@ -374,5 +377,4 @@ if __name__ == "__main__":
     cleanup_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-
     app.run(host="0.0.0.0", port=port)
