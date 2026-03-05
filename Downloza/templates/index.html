@@ -32,8 +32,6 @@ max-width:1100px;
 margin:auto
 }
 
-/* NAVBAR */
-
 .navbar{
 display:flex;
 align-items:center;
@@ -56,8 +54,6 @@ border-radius:50%
 font-weight:700;
 font-size:20px
 }
-
-/* HERO */
 
 .hero{
 text-align:center;
@@ -86,8 +82,6 @@ border-radius:20px;
 margin:3px;
 font-size:13px
 }
-
-/* DOWNLOADER BOX */
 
 .downloader{
 max-width:650px;
@@ -132,8 +126,6 @@ background:linear-gradient(90deg,#06b6d4,#0ea5e9);
 color:white
 }
 
-/* PROGRESS */
-
 .progress{
 height:10px;
 background:#e2e8f0;
@@ -145,10 +137,9 @@ overflow:hidden
 .bar{
 height:100%;
 width:0%;
-background:#3b82f6
+background:#3b82f6;
+transition:width 0.3s
 }
-
-/* SPINNER */
 
 .spinner{
 display:none;
@@ -170,8 +161,6 @@ margin:auto
 0%{transform:rotate(0)}
 100%{transform:rotate(360deg)}
 }
-
-/* SECTIONS */
 
 .section{
 padding:70px 0
@@ -205,8 +194,6 @@ text-align:center;
 color:#64748b
 }
 
-/* FAQ */
-
 .faq{
 background:white;
 padding:20px;
@@ -214,8 +201,6 @@ border-radius:10px;
 box-shadow:0 5px 15px rgba(0,0,0,0.05);
 margin-bottom:12px
 }
-
-/* FOOTER */
 
 footer{
 margin-top:60px;
@@ -225,7 +210,15 @@ padding:35px;
 text-align:center
 }
 
-/* MODAL */
+footer a{
+color:#93c5fd;
+text-decoration:none;
+margin:0 8px
+}
+
+footer a:hover{
+text-decoration:underline
+}
 
 .modal{
 display:none;
@@ -261,14 +254,6 @@ color:white;
 padding:10px 20px
 }
 
-@media(max-width:600px){
-
-.hero h1{
-font-size:30px
-}
-
-}
-
 </style>
 
 </head>
@@ -278,18 +263,15 @@ font-size:30px
 <div class="container">
 
 <div class="navbar">
-
 <div class="logo-box">
 <img src="{{ url_for('static', filename='logo.png') }}">
 <div class="logo-text">Downloza</div>
 </div>
-
 </div>
 
 <div class="hero">
 
 <h1>Download Videos Instantly</h1>
-
 <p>Fast downloads from YouTube, Instagram, Facebook, Twitter & Pinterest.</p>
 
 <div class="tabs">
@@ -306,7 +288,9 @@ font-size:30px
 
 <button class="primary" onclick="getFormats()">Get Available Resolutions</button>
 
-<select id="resolution"></select>
+<select id="resolution">
+<option value="">Select resolution</option>
+</select>
 
 <button class="download" onclick="downloadVideo()">Download Video</button>
 
@@ -327,86 +311,18 @@ font-size:30px
 
 </div>
 
-<div class="section container">
-
-<h2 style="text-align:center;margin-bottom:30px">Why Use Downloza</h2>
-
-<div class="grid">
-
-<div class="card">
-<h3>Fast Download</h3>
-<p>Optimized servers deliver high-speed downloads.</p>
-</div>
-
-<div class="card">
-<h3>High Quality</h3>
-<p>Download videos in the best available resolution.</p>
-</div>
-
-<div class="card">
-<h3>Secure</h3>
-<p>No login required and your downloads stay private.</p>
-</div>
-
-<div class="card">
-<h3>All Devices</h3>
-<p>Works on mobile, tablet and desktop.</p>
-</div>
-
-</div>
-
-</div>
-
-<div class="section container">
-
-<h2 style="text-align:center;margin-bottom:30px">How to Download Videos</h2>
-
-<div class="grid">
-
-<div class="card">
-<h3>1. Copy Link</h3>
-<p>Copy video link from social media.</p>
-</div>
-
-<div class="card">
-<h3>2. Paste Link</h3>
-<p>Paste the link into the downloader.</p>
-</div>
-
-<div class="card">
-<h3>3. Download</h3>
-<p>Select resolution and download instantly.</p>
-</div>
-
-</div>
-
-</div>
-
-<div class="section container">
-
-<h2 style="text-align:center;margin-bottom:30px">FAQ</h2>
-
-<div class="faq">
-<b>Is Downloza free?</b>
-<p>Yes. The downloader is completely free.</p>
-</div>
-
-<div class="faq">
-<b>Do I need software?</b>
-<p>No installation required.</p>
-</div>
-
-<div class="faq">
-<b>Is it safe?</b>
-<p>Yes. No login or personal information required.</p>
-</div>
-
-</div>
-
 <footer>
 
 <p>© 2026 Downloza</p>
+
 <p>Video Downloader for YouTube, Instagram, Facebook, Twitter and Pinterest</p>
+
+<p style="margin-top:15px">
+<a href="/about">About</a> |
+<a href="/privacy">Privacy Policy</a> |
+<a href="/terms">Terms of Service</a> |
+<a href="/contact">Contact</a>
+</p>
 
 </footer>
 
@@ -415,7 +331,6 @@ font-size:30px
 <div class="modal-box">
 
 <h2>COMING SOON</h2>
-
 <p>This link may not contain downloadable video.</p>
 
 <button onclick="closeModal()">OK</button>
@@ -440,6 +355,11 @@ async function getFormats(){
 
 const url=document.getElementById("url").value
 
+if(!url){
+alert("Please paste a video link")
+return
+}
+
 const res=await fetch("/get_formats",{
 method:"POST",
 headers:{"Content-Type":"application/json"},
@@ -454,7 +374,7 @@ return
 }
 
 const select=document.getElementById("resolution")
-select.innerHTML=""
+select.innerHTML='<option value="">Select resolution</option>'
 
 data.formats.forEach(f=>{
 const opt=document.createElement("option")
@@ -470,7 +390,18 @@ async function downloadVideo(){
 const url=document.getElementById("url").value
 const height=document.getElementById("resolution").value
 
+if(!url){
+alert("Paste a video link first")
+return
+}
+
+if(!height){
+alert("Select a resolution first")
+return
+}
+
 document.getElementById("spinner").style.display="block"
+document.getElementById("bar").style.width="0%"
 
 const res=await fetch("/download",{
 method:"POST",
@@ -479,6 +410,12 @@ body:JSON.stringify({url,height})
 })
 
 const data=await res.json()
+
+if(data.error){
+alert(data.error)
+document.getElementById("spinner").style.display="none"
+return
+}
 
 downloadId=data.download_id
 
@@ -499,7 +436,14 @@ bar.style.width=data.progress+"%"
 
 if(data.status==="ready"){
 clearInterval(interval)
+document.getElementById("spinner").style.display="none"
 window.location="/download_file/"+downloadId
+}
+
+if(data.status==="error"){
+clearInterval(interval)
+document.getElementById("spinner").style.display="none"
+alert("Download failed")
 }
 
 },1000)
